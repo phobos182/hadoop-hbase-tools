@@ -12,7 +12,7 @@ Fair Scheduler
 
 Example output
 ----
-    root@jobs-dev-hnn2:/usr/share/diamond/user_scripts# ./fair_scheduler.rb -s jobs-aa-hnn -p mykey
+    root@server:/usr/share/diamond/user_scripts# ./fair_scheduler.rb -s jobs-aa-hnn -p mykey
     fairscheduler.pool.pool1.jobs 4
     fairscheduler.pool.pool1.maps 3
     fairscheduler.pool.pool1.reduces 1
