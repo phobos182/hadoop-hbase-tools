@@ -112,6 +112,8 @@ regionserver_table.children.collect do |row|
       parse_key_values(detail[:value]).each do |k,v|
         # Hack - If key contains latency convert from Nanoseconds => Milliseconds
         v = (v.to_i / 1000000.0).to_s if @convert_keys.any? {|i| i.include?(k) }
+        # Some HBase metrics have '%'. Remove them
+        v.gsub!('%', '') if v.include?('%')
         # Print graphite key
         graphite(@key_name, k, v)
       end
