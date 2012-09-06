@@ -4,11 +4,6 @@ require 'rubygems'
 require 'optparse'
 require 'mechanize'
 
-# Pretty print KeyValues in Graphite format
-def pp(prefix, key, value)
-  puts [prefix, key].join('.') + ' ' +  value
-end
-
 # OptParse default options
 options = {}
 options[:prefix] = 'fairscheduler'
@@ -17,7 +12,7 @@ options[:server] = 'localhost'
 optparse = OptionParser.new do|opts|
   opts.banner = "Usage: scheduler_metrics -s [hadoop_jobtracker]"
   opts.on( '-s', '--server SERVER', 'Hadoop JobTracker' ) { |s| options[:server] = s }
-  opts.on( '-k', '--prefixr PREFIX', 'Graphite key previs' ) { |p| options[:previs] = p }
+  opts.on( '-k', '--prefix PREFIX', 'Graphite key prefix' ) { |p| options[:prefix] = p }
   opts.on( '-h', '--help', 'Display this screen' ) do
     puts opts
     exit
@@ -26,7 +21,6 @@ end
 
 #_ PARSE OPTIONS _#
 optparse.parse!
-
 
 # Check for null server name
 if options[:server].nil?
@@ -42,6 +36,8 @@ agent = Mechanize.new
 #_ POOL STATS _#
 page = agent.get('http://' + options[:server] + ':50030/scheduler?advanced')
 doc = Nokogiri::HTML(page.body)
+
+#_ POOL STATS _#
 table = doc.xpath('/html/body/table[1]')
 table.children.collect do |row|
   detail = {}
@@ -90,7 +86,10 @@ pools.each do |p|
 end
 
 #_ AGGREGATE RUNNING JOBS _#
+#_ Get a list of unique pool names _#
 pool_names = jobs.collect { |c| c[:pool] }.uniq
+
+#_ Iterate over pool names, aggregate running jobs by pool _#
 pool_names.each do |p|
   j = jobs.select { |i| i[:pool] == p }
   maps_running = j.inject(0) { |sum, job| sum + job[:map_running].to_i }
