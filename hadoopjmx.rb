@@ -85,10 +85,10 @@ class HadoopJMX
           # Try to parse the response as JSON. Otherwise return key value
           begin
             @mbean = JSON.parse(k[key])
-            break
           rescue Exception => e
             @mbean = k[key]
           end
+          break
         else
           self.recurse_find(key, v)
         end
