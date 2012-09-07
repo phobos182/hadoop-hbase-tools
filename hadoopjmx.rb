@@ -88,6 +88,7 @@ class HadoopJMX
           rescue Exception => e
             @mbean = k[key]
           end
+          # Return first match. Stop parsing
           break
         else
           self.recurse_find(key, v)
