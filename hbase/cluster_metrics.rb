@@ -8,12 +8,12 @@ require 'socket'
 
 # Options
 options = {}
+options[:file] = false
 
 optparse = OptionParser.new do|opts|
   opts.banner = "Usage: cluster_metrics -s [hbase_master] -t [hbase_table] -m [metric]"
   opts.on( '-s', '--server SERVER', 'HBase Master server' ) { |s| options[:server] = s }
-  opts.on( '-t', '--table TABLE', 'HBase table on which to collect metrics from' ) { |t| options[:table] = t }
-  opts.on( '-m', '--metric METRIC', 'Metric to collect from region' ) { |m| options[:metric] = m }
+  opts.on( '-f', '--file FILE', 'Output to CSV File' ) { |f| options[:file] = f }
   opts.on( '-h', '--help', 'Display this screen' ) do
     puts opts
     exit
@@ -28,11 +28,23 @@ rescue
   exit 1
 end
 
-if options[:server].nil? or options[:metric].nil? or options[:table].nil?
+if options[:server].nil?
   puts optparse.banner
   exit 1
 end
 
+if options[:file]
+  @f = File.open(options[:file],'w')
+end
+
+def std_out(string)
+  if @f
+    @f.puts(string)
+  else
+    puts string
+  end
+end
+  
 def parse_key_values(text, separator = ',', delimiter = '=')
   result = {}
   begin
@@ -52,34 +64,38 @@ def parse_key_values(text, separator = ',', delimiter = '=')
 end
 
 #_ VARIABLES _#
-region_servers = []
 agent = Mechanize.new
-@region_online = 0
 @region_servers = []
-@result = []
-@metric = options[:metric].downcase
+@result = {}
 
-page = agent.get('http://' + options[:server] + ':60010/table.jsp?name=' + options[:table])
+page = agent.get('http://' + options[:server] + ':60010/master-status')
 doc = Nokogiri::HTML(page.body)
-table = doc.xpath('/html/body/table[3]')
+table = doc.xpath('/html/body/table[4]')
 table.children.collect do |row|
   detail = {}
   [
-    [:name, 'td[1]/text()'],
-    [:count, 'td[2]/text()']
+    [:name, 'td[1]/a/text()']
   ].each do |name, xpath|
     detail[name] = row.at_xpath(xpath).to_s.strip
   end
-  @region_servers << detail[:name] unless detail[:name].nil? or detail[:name].empty? or detail[:name].include?('Region Server')
-  @region_online += detail[:count].to_i unless detail[:count].include?('Count') or detail[:count].empty? or detail[:count].nil?
+  rs = detail[:name].split(',')[0]
+  @region_servers << rs unless rs.nil? or rs.empty?
 end
 
-# Gather metrics from each RS
+#_ REGIONSERVER INFO _#
 @region_servers.each do |rs|
-  page = agent.get(rs + 'rs-status')
+  page = agent.get('http://' + rs + ':60030/rs-status')
   doc = Nokogiri::HTML(page.body)
-  table = doc.xpath('/html/body/table[2]')
-  table.children.collect do |row|
+  regionserver_table = doc.xpath("/html/body/table[@id='attributes_table']")
+  tasks_running = doc.xpath("/html/body/table[2]/tr[1]/th[1]/text()")
+  # If compaction / split tasks are running. Shift the table
+  # number down by 1.
+  tasks_running.empty? or tasks_running.to_s.include?('Region') ? table_num = 2 : table_num = 3
+  region_table = doc.xpath("/html/body/table[#{table_num}]")
+
+  raise "Count not get regionserver status from HBase #{rs}" if regionserver_table.empty? or region_table.empty?
+
+  region_table.children.collect do |row|
     detail = {}
     result = nil
     [
@@ -91,15 +107,72 @@ end
       detail[name] = row.at_xpath(xpath).to_s.strip
     end
     begin
-      metrics = parse_key_values(detail[:metrics])
-      rs_match = detail[:name].split(',')[0]
-      if rs_match.downcase == options[:table].downcase
-        @result << metrics[@metric] if metrics.has_key?(@metric)
-      end
+      table = detail[:name].split(',')[0]
+      metric_hash = parse_key_values(detail[:metrics])
+      region_md5 = detail[:name].split(',')[2].split('.')[1]
+      @result[region_md5] = { :md5 => region_md5,  :server => rs, :metrics => metric_hash, :table => table }
     rescue Exception
     end
   end
 end
 
-puts 'Regions: ' + @region_online.to_s
-puts @result.join(',')
+#_ CSV HEADERS _#
+# Build a list of all hash values to include in the CSV.
+# Will be used as a 'skeleton' to merge with other hash
+# values.
+headers = {}
+@result.inject(headers) do |result,k|
+  k[1].each do |k1,v1|
+    if not k1.to_s.include?('metric')
+      result.has_key?(k1) ? result[k1] += 1 : result[k1] = 0
+    end
+    if v1.is_a?(Hash)
+      v1.each do |k2,v2|
+        result.has_key?(k2) ? result[k2] += 1 : result[k2] = 0
+      end
+    end
+  end
+  result
+end
+
+#_ REMOVE UNIQUES _#
+# Remove any value which is not present
+# in all regions. Not all regions have
+# compression, etc.. 
+max = headers.values.max.to_i
+excluded = headers.collect {|key, value| key if value.to_i < max } 
+excluded.delete_if {|x| x == nil}
+
+#_ SORT HEADERS _#
+headers.delete_if {|key, value| value.to_i < max } 
+headers = headers.keys.collect { |i| i.to_s }.sort
+
+#_ OUTPUT CSV HEADER _#
+std_out(headers.join(','))
+
+@result.each do |r,hash|
+  output = {}
+  sorted = []
+  ostring = []
+  hash.each do |k,v|
+    if v.is_a?(Hash)
+      v.each do |k1,v1|
+        output.merge!({ k1.to_s => v1})
+      end
+    else
+      output.merge!({ k.to_s => v})
+    end
+  end
+  sorted = output.keys.sort
+  sorted.delete_if {|x| excluded.include?(x) }
+  # Test to make sure the sorted headers match output
+  # keys. Otherwise do not print the output
+  break unless "#{headers.join(',')}" == "#{sorted.join(',')}"
+
+  # Collect metrics in correct sorted order
+  sorted.each do |m|
+    ostring << output[m] unless excluded.include?(m)   
+  end
+  # Display CSV
+  std_out(ostring.join(','))
+end
