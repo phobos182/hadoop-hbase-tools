@@ -90,7 +90,11 @@ agent = Mechanize.new
 page = agent.get('http://' + @server + ':60030/rs-status')
 doc = Nokogiri::HTML(page.body)
 regionserver_table = doc.xpath("/html/body/table[@id='attributes_table']")
-region_table = doc.xpath('/html/body/table[2]')
+tasks_running = doc.xpath("/html/body/table[2]/tr[1]/th[1]/text()")
+# If compaction / split tasks are running. Shift the table
+# number down by 1.
+tasks_running.empty? or tasks_running.to_s.include?('Region') ? table_num = 2 : table_num = 3
+region_table = doc.xpath("/html/body/table[#{table_num}]")
 
 raise "Count not get regionserver status from HBase #{@server}" if regionserver_table.empty? or region_table.empty?
 
